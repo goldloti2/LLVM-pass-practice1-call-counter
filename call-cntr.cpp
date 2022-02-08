@@ -1,12 +1,13 @@
 #define DEBUG_TYPE "call-cntr"
 #include "llvm/Pass.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/Statistic.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/IRBuilder.h"
+// #include "llvm/IR/Module.h"
+// #include "llvm/IR/Function.h"
+// #include "llvm/ADT/Statistic.h"
+// #include "llvm/IR/Instructions.h"
+// #include "llvm/IR/Constants.h"
+// #include "llvm/IR/InstrTypes.h"
 using namespace llvm;
 using namespace std;
 
@@ -15,41 +16,37 @@ namespace {
         static char ID; // Pass identification, replacement for typeid
         Call_Cntr() : ModulePass(ID) {}
 
-        int cntr = 0;
-
-        GlobalVariable *createGlob(Module *M, string Name, int init) {
-            Type *i32t = Type::getInt32Ty(M->getContext());
-            M->getOrInsertGlobal(Name, i32t);
-            GlobalVariable *gVar = M->getNamedGlobal(Name);
+        GlobalVariable *createGlob(Module *M, Type *type, string name) {
+            M->getOrInsertGlobal(name, type);
+            GlobalVariable *gVar = M->getNamedGlobal(name);
             gVar->setLinkage(GlobalValue::CommonLinkage);
             gVar->setAlignment(MaybeAlign(4));
-            gVar->setInitializer(ConstantInt::get(i32t, init));
             return gVar;
         }
 
         virtual bool runOnModule(Module &M) {
-            Type *i32t = Type::getInt32Ty(M.getContext());
+            IRBuilder<> builder(M.getContext());
+            Type *i32t = builder.getInt32Ty();
             for(Function &F : M) {
-                outs() << "Function: " << F.getName() << '\n';
+                int cntr = 0;
+                errs() << "Function: " << F.getName() << '\n';
                 for(BasicBlock &BB : F) {
                     for(Instruction &I : BB) {
                         if(CallInst *CI = dyn_cast<CallInst>(&I))
                         {
-                            outs() << "call counter: " << cntr << '\n';
-                            string cntr_name = "call_cntr_" + to_string(cntr);
-                            Value *cntr_glob = createGlob(&M, cntr_name, 0);
-                            cntr++;
-                            // auto *newInst = new AllocaInst(i32t, 0, Twine(), &I);
-                            // newInst->setAlignment(MaybeAlign(4));
-                            // auto *testInst = new AllocaInst(i32t, 0, ConstantInt::get(i32t, 1), Twine(), &I);
-                            Value *loadcntr = new LoadInst(i32t, cntr_glob, Twine(), false, MaybeAlign(4), &I);
-                            Value *addcntr = new BinaryOperator::Create(1, loadcntr, ConstantInt::get(i32t, 1), Twine(), &I); // Can't find Create!!
-                            Value *storecntr = new StoreInst(loadcntr, cntr_glob, false, MaybeAlign(4), &I);
+                            string cntr_name = "call_" + CI->getCalledFunction()->getName().str() + "_in_" + F.getName().str() + "_" + to_string(cntr++);
+                            errs() << "call counter: " << cntr_name << '\n';
+                            builder.SetInsertPoint(&I);
+                            GlobalVariable *cntr_glob = createGlob(&M, i32t, cntr_name);
+                            cntr_glob->setInitializer(builder.getInt32(0));
+                            Value *loadcntr = builder.CreateLoad(i32t, cntr_glob);
+                            Value *temp_sum = builder.CreateAdd(loadcntr, builder.getInt32(1));
+                            builder.CreateStore(temp_sum, cntr_glob);
                         }
                     }
                 }
             }
-            outs() <<"----------\n" << M << "\n----------\n";
+            errs() <<"----------\n" << M << "\n----------\n";
 
             return false;
         }
