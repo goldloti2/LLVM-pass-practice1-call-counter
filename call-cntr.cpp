@@ -1,4 +1,5 @@
 #define DEBUG_TYPE "call-cntr"
+#include <vector>
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/IR/IRBuilder.h"
@@ -20,13 +21,27 @@ namespace {
             M->getOrInsertGlobal(name, type);
             GlobalVariable *gVar = M->getNamedGlobal(name);
             gVar->setLinkage(GlobalValue::CommonLinkage);
-            gVar->setAlignment(MaybeAlign(4));
+            gVar->setAlignment(MaybeAlign(type->getScalarSizeInBits()/8));
+            // errs() << gVar << '\n';
             return gVar;
+        }
+
+        CallInst *call_print(Module *M, IRBuilder<> *builder, string name) {
+            FunctionCallee callee = M->getOrInsertFunction("printf",
+                                                           FunctionType::get(builder->getInt32Ty(), builder->getInt8PtrTy(), true));
+            GlobalVariable *g_cntr = M->getNamedGlobal(name);
+            // errs() << name << ' ' << gVar << '\n';
+            Value *loadcntr = builder->CreateLoad(builder->getInt32Ty(), g_cntr);
+            string str = name + ": %u\n";
+            Value *p_str = builder->CreateGlobalStringPtr(str);
+            vector<Value*> args = {p_str, loadcntr};
+            return builder->CreateCall(callee, args);
         }
 
         virtual bool runOnModule(Module &M) {
             IRBuilder<> builder(M.getContext());
             Type *i32t = builder.getInt32Ty();
+            vector<string> cntr_name_list;
             for(Function &F : M) {
                 int cntr = 0;
                 errs() << "Function: " << F.getName() << '\n';
@@ -34,19 +49,27 @@ namespace {
                     for(Instruction &I : BB) {
                         if(CallInst *CI = dyn_cast<CallInst>(&I))
                         {
-                            string cntr_name = "call_" + CI->getCalledFunction()->getName().str() + "_in_" + F.getName().str() + "_" + to_string(cntr++);
+                            string cntr_name = "call_" + CI->getCalledFunction()->getName().str() + "_in_" + F.getName().str() + '_' + to_string(cntr++);
+                            cntr_name_list.push_back(cntr_name);
                             errs() << "call counter: " << cntr_name << '\n';
                             builder.SetInsertPoint(&I);
-                            GlobalVariable *cntr_glob = createGlob(&M, i32t, cntr_name);
-                            cntr_glob->setInitializer(builder.getInt32(0));
-                            Value *loadcntr = builder.CreateLoad(i32t, cntr_glob);
+                            GlobalVariable *g_cntr = createGlob(&M, i32t, cntr_name);
+                            g_cntr->setInitializer(builder.getInt32(0));
+                            Value *loadcntr = builder.CreateLoad(i32t, g_cntr);
                             Value *temp_sum = builder.CreateAdd(loadcntr, builder.getInt32(1));
-                            builder.CreateStore(temp_sum, cntr_glob);
+                            builder.CreateStore(temp_sum, g_cntr);
                         }
                     }
                 }
+                // errs() << cntr_name_list.size() << '/' << cntr_name_list.capacity() << '\n';
             }
-            errs() <<"----------\n" << M << "\n----------\n";
+            // for(string x : cntr_name_list)
+            //     errs() << x << '\n';
+            Instruction &end = M.getFunction("main")->back().back();
+            builder.SetInsertPoint(&end);
+            for(string name : cntr_name_list)
+                call_print(&M, &builder, name);
+            errs() << "----------\n" << M << "\n----------\n";
 
             return false;
         }
